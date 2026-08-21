@@ -1,0 +1,782 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ProtonNL</title>
+  <style>
+    :root {
+      --bg: #0c0c0d;
+      --line: #232327;
+      --text: #ececef;
+      --muted: #8a8a93;
+      --faint: #5c5c64;
+      --hover: #18181b;
+      --pick: #1e1e22;
+      --live: #7d9a7c;
+      --warn: #a08070;
+    }
+
+    * { box-sizing: border-box; margin: 0; }
+    html, body { height: 100%; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font: 14px/1.4 ui-sans-serif, system-ui, Segoe UI, sans-serif;
+      letter-spacing: -0.01em;
+    }
+
+    .shell {
+      width: 100%;
+      height: 100%;
+      display: flex;
+      flex-direction: column;
+      padding: 28px 32px 20px;
+      background: var(--bg);
+      position: fixed;
+      inset: 0;
+    }
+
+    header {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: 20px;
+    }
+    header h1 {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--muted);
+      letter-spacing: 0.14em;
+      text-transform: uppercase;
+    }
+    header h1 b {
+      font-weight: 800;
+      color: var(--text);
+      letter-spacing: 0.16em;
+    }
+    header button {
+      background: none;
+      border: 0;
+      color: var(--faint);
+      font: inherit;
+      cursor: pointer;
+      padding: 0;
+    }
+    header button:hover { color: var(--text); }
+
+    #session {
+      display: grid;
+      gap: 10px;
+      padding-bottom: 16px;
+      margin-bottom: 4px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .session-top {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 16px;
+    }
+    #now-name {
+      font-size: 22px;
+      font-weight: 600;
+      letter-spacing: -0.03em;
+      line-height: 1.15;
+    }
+    #now-name.idle { color: var(--muted); font-weight: 500; font-size: 18px; }
+    #now-time {
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      font-size: 13px;
+      white-space: nowrap;
+    }
+    #now-sub { color: var(--faint); font-size: 13px; }
+
+    .stats {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 14px 20px;
+      font-size: 12px;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+    }
+    .shield.ok { color: var(--live); }
+    .shield.off { color: var(--faint); }
+    .shield.block { color: var(--warn); }
+    #now-ip { letter-spacing: 0.02em; }
+    #now-traffic span + span { margin-left: 12px; }
+
+    .session-row {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 18px;
+      margin-top: 4px;
+    }
+
+    .load {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--faint);
+      font-size: 12px;
+    }
+    .bar {
+      width: 72px;
+      height: 3px;
+      background: #2a2a30;
+      border-radius: 99px;
+      overflow: hidden;
+    }
+    .bar > i {
+      display: block;
+      height: 100%;
+      width: 0;
+      background: var(--text);
+      opacity: 0.7;
+      transition: width .35s ease;
+    }
+
+    .proto {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: var(--faint);
+      font-size: 12px;
+      margin-left: auto;
+    }
+    #proto {
+      appearance: none;
+      background: var(--bg);
+      color: var(--text);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: 5px 24px 5px 8px;
+      font: inherit;
+      font-size: 12px;
+      cursor: pointer;
+      background-image: linear-gradient(45deg, transparent 50%, var(--faint) 50%),
+        linear-gradient(135deg, var(--faint) 50%, transparent 50%);
+      background-position: calc(100% - 12px) 50%, calc(100% - 8px) 50%;
+      background-size: 4px 4px, 4px 4px;
+      background-repeat: no-repeat;
+    }
+    #proto:focus { outline: 1px solid #3a3a42; }
+
+    .search {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin: 10px 0 8px;
+      padding: 10px 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #101012;
+      transition: border-color .18s ease, background .18s ease, box-shadow .18s ease;
+    }
+    .search:focus-within {
+      border-color: #3a3a44;
+      background: #141416;
+      box-shadow: 0 0 0 3px rgba(255,255,255,0.03);
+    }
+    .search svg {
+      flex: none;
+      width: 15px;
+      height: 15px;
+      stroke: var(--faint);
+      fill: none;
+      stroke-width: 1.7;
+      transition: stroke .18s ease;
+    }
+    .search:focus-within svg { stroke: var(--muted); }
+    #q {
+      width: 100%;
+      background: transparent;
+      border: 0;
+      color: var(--text);
+      font: inherit;
+      outline: none;
+      padding: 0;
+    }
+    #q::placeholder { color: var(--faint); }
+
+    #tree {
+      flex: 1;
+      overflow: auto;
+      padding: 6px 0 12px;
+    }
+    #tree::-webkit-scrollbar { width: 8px; }
+    #tree::-webkit-scrollbar-thumb { background: #2a2a30; }
+
+    .empty { color: var(--faint); padding: 24px 0; font-size: 13px; }
+
+    summary {
+      list-style: none;
+      display: grid;
+      grid-template-columns: 22px 1fr auto;
+      gap: 8px;
+      align-items: center;
+      padding: 7px 6px;
+      cursor: pointer;
+      border-radius: 4px;
+      user-select: none;
+    }
+    summary::-webkit-details-marker { display: none; }
+    summary {
+      transition: background .15s ease;
+    }
+    summary:hover { background: var(--hover); }
+    .row.pick > summary,
+    .leaf.pick { background: var(--pick); }
+    .leaf.live .name::after {
+      content: "";
+      display: inline-block;
+      width: 5px;
+      height: 5px;
+      margin-left: 8px;
+      border-radius: 50%;
+      background: var(--live);
+      vertical-align: middle;
+      box-shadow: 0 0 0 0 rgba(125,154,124,0.6);
+      animation: pulse 2.2s ease-out infinite;
+    }
+    @keyframes pulse {
+      0% { box-shadow: 0 0 0 0 rgba(125,154,124,0.45); }
+      70% { box-shadow: 0 0 0 6px rgba(125,154,124,0); }
+      100% { box-shadow: 0 0 0 0 rgba(125,154,124,0); }
+    }
+    details[open] > .city,
+    details[open] > .servers {
+      animation: rise .16s ease;
+    }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(-4px); }
+      to { opacity: 1; transform: none; }
+    }
+    .row, .leaf { transition: background .15s ease; }
+
+    .chev {
+      width: 22px;
+      height: 22px;
+      display: grid;
+      place-items: center;
+    }
+    .chev::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      border-right: 1.5px solid var(--faint);
+      border-bottom: 1.5px solid var(--faint);
+      transform: rotate(-45deg);
+      transition: transform .12s ease;
+    }
+    details[open] > summary .chev::before { transform: rotate(45deg); }
+
+    .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .meta {
+      color: var(--faint);
+      font-variant-numeric: tabular-nums;
+      font-size: 12px;
+    }
+
+    .city { padding-left: 14px; }
+    .servers { padding: 0 0 6px 28px; }
+
+    .leaf {
+      width: 100%;
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      background: none;
+      border: 0;
+      color: inherit;
+      font: inherit;
+      text-align: left;
+      padding: 6px 6px 6px 8px;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .leaf:hover { background: var(--hover); }
+    .leaf .name { color: #c8c8ce; font-size: 13px; }
+
+    footer {
+      display: grid;
+      gap: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+    }
+    #hint {
+      min-height: 18px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    button.action {
+      height: 42px;
+      border: 0;
+      border-radius: 6px;
+      font: 600 13px/1 inherit;
+      cursor: pointer;
+    }
+    #go {
+      background: var(--text);
+      color: var(--bg);
+      transition: filter .15s ease, transform .15s ease;
+    }
+    #go:hover:not(:disabled) { filter: brightness(1.06); }
+    #go:active:not(:disabled) { transform: scale(0.985); }
+    #stop { transition: background .15s ease, border-color .15s ease; }
+    #go:disabled, #stop:disabled {
+      opacity: 0.35;
+      cursor: default;
+      filter: none;
+    }
+    #stop {
+      background: transparent;
+      color: var(--text);
+      border: 1px solid var(--line);
+    }
+    #stop:hover:not(:disabled) { background: var(--hover); }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header>
+      <h1>Proton<b>NL</b></h1>
+      <button type="button" id="refresh">Refresh</button>
+    </header>
+
+    <section id="session">
+      <div class="session-top">
+        <div id="now-name" class="idle">Disconnected</div>
+        <div id="now-time"></div>
+      </div>
+      <div id="now-sub">Pick a server below</div>
+      <div class="stats">
+        <span id="now-shield" class="shield off">Unprotected</span>
+        <span id="now-ip"></span>
+        <span id="now-traffic"></span>
+      </div>
+      <div class="session-row">
+        <div class="load" id="now-load" hidden>
+          <span>Load</span>
+          <div class="bar"><i id="now-bar"></i></div>
+          <span id="now-pct">0%</span>
+        </div>
+        <label class="proto">
+          Protocol
+          <select id="proto"></select>
+        </label>
+      </div>
+    </section>
+
+    <label class="search">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l5 5"/></svg>
+      <input id="q" type="search" placeholder="Search countries, cities, servers" autocomplete="off" spellcheck="false">
+    </label>
+    <div id="tree"><div class="empty">Waiting for ProtonVPN…</div></div>
+    <footer>
+      <div id="hint">Select a country, city, or server.</div>
+      <div class="actions">
+        <button type="button" class="action" id="go" disabled>Connect</button>
+        <button type="button" class="action" id="stop" disabled>Disconnect</button>
+      </div>
+    </footer>
+  </div>
+  <script>
+    const treeEl = document.getElementById("tree");
+    const hintEl = document.getElementById("hint");
+    const goEl = document.getElementById("go");
+    const stopEl = document.getElementById("stop");
+    const qEl = document.getElementById("q");
+    const protoEl = document.getElementById("proto");
+    const nameEl = document.getElementById("now-name");
+    const subEl = document.getElementById("now-sub");
+    const timeEl = document.getElementById("now-time");
+    const loadEl = document.getElementById("now-load");
+    const barEl = document.getElementById("now-bar");
+    const pctEl = document.getElementById("now-pct");
+    const shieldEl = document.getElementById("now-shield");
+    const ipEl = document.getElementById("now-ip");
+    const trafficEl = document.getElementById("now-traffic");
+
+    let snapshot = { ready: false, regions: [] };
+    let status = { state: "disconnected", protocols: [] };
+    let selected = null;
+    let demo = false;
+
+    const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({
+      "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+    }[c]));
+
+    function matches(q, ...parts) {
+      if (!q) return true;
+      return parts.some((p) => (p || "").toLowerCase().includes(q));
+    }
+
+    function hint(text) { hintEl.textContent = text; }
+
+    function fmtBytes(n) {
+      n = Number(n) || 0;
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      let i = 0;
+      let x = n;
+      while (x >= 1024 && i < units.length - 1) { x /= 1024; i++; }
+      const v = i === 0 ? String(Math.round(x)) : x >= 10 ? x.toFixed(1) : x.toFixed(2);
+      return v + " " + units[i];
+    }
+
+    function elapsed(iso) {
+      if (!iso) return "";
+      const ms = Date.now() - Date.parse(iso);
+      if (!Number.isFinite(ms) || ms < 0) return "";
+      const s = Math.floor(ms / 1000);
+      const h = Math.floor(s / 3600);
+      const m = Math.floor((s % 3600) / 60);
+      const sec = s % 60;
+      if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+      return `${m}:${String(sec).padStart(2, "0")}`;
+    }
+
+    function fillProtocols(list, current) {
+      const opts = list && list.length ? list : [
+        { id: "Smart", label: "Smart" },
+        { id: "WireGuardUdp", label: "WireGuard UDP" },
+        { id: "WireGuardTcp", label: "WireGuard TCP" },
+        { id: "WireGuardTls", label: "WireGuard TLS" },
+        { id: "OpenVpnUdp", label: "OpenVPN UDP" },
+        { id: "OpenVpnTcp", label: "OpenVPN TCP" }
+      ];
+      if (protoEl.dataset.ids !== opts.map((p) => p.id).join(",")) {
+        protoEl.innerHTML = opts.map((p) => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join("");
+        protoEl.dataset.ids = opts.map((p) => p.id).join(",");
+      }
+      if (current && protoEl.value !== current && ![...protoEl.options].some((o) => o.selected && document.activeElement === protoEl))
+        protoEl.value = current;
+    }
+
+    function paintStatus() {
+      const state = status.state || "disconnected";
+      stopEl.disabled = state === "disconnected";
+
+      if (state === "connected" && status.server) {
+        nameEl.textContent = status.server;
+        nameEl.classList.remove("idle");
+        const bits = [status.city, status.country].filter(Boolean);
+        subEl.textContent = bits.join(" · ");
+        timeEl.textContent = elapsed(status.connectedAt);
+        loadEl.hidden = false;
+        const load = status.load || 0;
+        barEl.style.width = Math.max(0, Math.min(100, load)) + "%";
+        pctEl.textContent = load + "%";
+        shieldEl.textContent = "Protected";
+        shieldEl.className = "shield ok";
+        ipEl.textContent = status.ip || "";
+        trafficEl.innerHTML = `<span>↓ ${fmtBytes(status.bytesDown)}</span><span>↑ ${fmtBytes(status.bytesUp)}</span>`;
+      } else if (state === "connecting") {
+        nameEl.textContent = "Connecting";
+        nameEl.classList.remove("idle");
+        subEl.textContent = status.server || selected?.label || "Starting tunnel…";
+        timeEl.textContent = "";
+        loadEl.hidden = true;
+        shieldEl.textContent = "Connecting";
+        shieldEl.className = "shield";
+        ipEl.textContent = "";
+        trafficEl.textContent = "";
+      } else {
+        nameEl.textContent = "Disconnected";
+        nameEl.classList.add("idle");
+        subEl.textContent = "Pick a server below";
+        timeEl.textContent = "";
+        loadEl.hidden = true;
+        if (status.blocked) {
+          shieldEl.textContent = "Blocked";
+          shieldEl.className = "shield block";
+        } else {
+          shieldEl.textContent = "Unprotected";
+          shieldEl.className = "shield off";
+        }
+        ipEl.textContent = "";
+        trafficEl.textContent = "";
+      }
+
+      fillProtocols(status.protocols, status.protocol || status.activeProtocol);
+      markLive();
+    }
+
+    function markLive() {
+      for (const leaf of treeEl.querySelectorAll(".leaf")) {
+        leaf.classList.toggle("live", !!status.serverId && leaf.dataset.id === status.serverId);
+      }
+    }
+
+    function select(sel) {
+      selected = sel;
+      goEl.disabled = !selected;
+      for (const n of treeEl.querySelectorAll(".pick")) n.classList.remove("pick");
+      if (sel?.el) sel.el.classList.add("pick");
+      if (sel?.label && status.state !== "connected") hint(sel.label);
+    }
+
+    function render() {
+      const q = qEl.value.trim().toLowerCase();
+      const regions = snapshot.regions || [];
+      if (!regions.length) {
+        treeEl.innerHTML = `<div class="empty">${snapshot.ready ? "No free servers." : "Waiting for ProtonVPN…"}</div>`;
+        return;
+      }
+
+      const html = [];
+      for (const region of regions) {
+        const cities = [];
+        for (const city of region.cities || []) {
+          const servers = (city.servers || []).filter((s) =>
+            matches(q, region.name, region.code, city.name, s.name));
+          if (q && !servers.length && !matches(q, region.name, region.code, city.name)) continue;
+          cities.push({ city, list: q ? servers : (city.servers || []) });
+        }
+        if (q && !cities.length && !matches(q, region.name, region.code)) continue;
+
+        const open = q ? " open" : "";
+        html.push(`<details class="row country"${open} data-kind="country" data-code="${esc(region.code)}">
+          <summary><span class="chev"></span><span class="name">${esc(region.name)}</span><span class="meta">${region.serverCount}</span></summary>`);
+        for (const { city, list } of cities) {
+          html.push(`<details class="row city"${open} data-kind="city" data-code="${esc(region.code)}" data-city="${esc(city.name)}">
+            <summary><span class="chev"></span><span class="name">${esc(city.name)}</span><span class="meta">${city.serverCount}</span></summary>
+            <div class="servers">`);
+          for (const s of list) {
+            html.push(`<button type="button" class="leaf" data-kind="server"
+              data-code="${esc(region.code)}" data-city="${esc(city.name)}"
+              data-id="${esc(s.id)}" data-name="${esc(s.name)}">
+              <span class="name">${esc(s.name)}</span>
+              <span class="meta">${s.load ? s.load + "%" : ""}</span>
+            </button>`);
+          }
+          html.push(`</div></details>`);
+        }
+        html.push(`</details>`);
+      }
+
+      treeEl.innerHTML = html.length ? html.join("") : `<div class="empty">No matches.</div>`;
+      bind();
+      markLive();
+    }
+
+    function payloadFromEl(el) {
+      const kind = el.dataset.kind;
+      if (kind === "country") {
+        return { country: el.dataset.code, city: null, serverId: null, server: null, label: el.querySelector(".name").textContent };
+      }
+      if (kind === "city") {
+        return { country: el.dataset.code, city: el.dataset.city, serverId: null, server: null, label: el.dataset.city };
+      }
+      return {
+        country: el.dataset.code,
+        city: el.dataset.city,
+        serverId: el.dataset.id,
+        server: el.dataset.name,
+        label: el.dataset.name
+      };
+    }
+
+    function bind() {
+      for (const row of treeEl.querySelectorAll("details.row")) {
+        const summary = row.querySelector(":scope > summary");
+        summary.addEventListener("click", (e) => {
+          const x = e.clientX - summary.getBoundingClientRect().left;
+          if (x < 28 || e.target.closest(".chev")) return;
+          e.preventDefault();
+          const p = payloadFromEl(row);
+          p.el = row;
+          select(p);
+        });
+        summary.addEventListener("dblclick", (e) => {
+          e.preventDefault();
+          row.open = !row.open;
+        });
+      }
+      for (const leaf of treeEl.querySelectorAll(".leaf")) {
+        leaf.addEventListener("click", () => {
+          const p = payloadFromEl(leaf);
+          p.el = leaf;
+          select(p);
+        });
+        leaf.addEventListener("dblclick", () => {
+          const p = payloadFromEl(leaf);
+          p.el = leaf;
+          select(p);
+          connect();
+        });
+      }
+    }
+
+    const demoData = {
+      ready: true,
+      regions: [
+        { code: "NL", name: "Netherlands", serverCount: 3, cities: [
+          { name: "Amsterdam", serverCount: 3, servers: [
+            { id: "1", name: "NL-FREE#6", load: 33 },
+            { id: "2", name: "NL-FREE#10", load: 41 },
+            { id: "3", name: "NL-FREE#5", load: 41 }
+          ]}
+        ]},
+        { code: "NO", name: "Norway", serverCount: 2, cities: [
+          { name: "Oslo", serverCount: 2, servers: [
+            { id: "4", name: "NO-FREE#6", load: 12 },
+            { id: "5", name: "NO-FREE#1", load: 28 }
+          ]}
+        ]}
+      ],
+      status: {
+        state: "connected",
+        server: "NL-FREE#6",
+        serverId: "1",
+        city: "Amsterdam",
+        country: "Netherlands",
+        countryCode: "NL",
+        load: 33,
+        protocol: "Smart",
+        connectedAt: new Date(Date.now() - 74000).toISOString(),
+        ip: "185.107.80.12",
+        bytesDown: 1843200,
+        bytesUp: 40960,
+        protected: true,
+        protocols: [
+          { id: "Smart", label: "Smart" },
+          { id: "WireGuardUdp", label: "WireGuard UDP" },
+          { id: "OpenVpnUdp", label: "OpenVPN UDP" }
+        ]
+      }
+    };
+
+    async function loadList() {
+      if (demo) {
+        snapshot = demoData;
+        status = demoData.status;
+        render();
+        paintStatus();
+        return;
+      }
+      try {
+        const res = await fetch("/api/list");
+        snapshot = await res.json();
+        if (snapshot.status) status = snapshot.status;
+        render();
+        paintStatus();
+        if (!selected) hint(`${(snapshot.regions || []).length} countries`);
+      } catch {
+        snapshot = { ready: false, regions: [] };
+        render();
+        hint("Hook is not reachable.");
+      }
+    }
+
+    async function loadStatus() {
+      if (demo) {
+        paintStatus();
+        return;
+      }
+      try {
+        const res = await fetch("/api/status");
+        status = await res.json();
+        paintStatus();
+      } catch { /* keep last */ }
+    }
+
+    async function connect() {
+      if (!selected) return;
+      goEl.disabled = true;
+      try {
+        if (demo) {
+          status = {
+            ...status,
+            state: "connected",
+            server: selected.server || selected.label,
+            serverId: selected.serverId,
+            city: selected.city,
+            country: selected.label,
+            load: 33,
+            connectedAt: new Date().toISOString()
+          };
+          paintStatus();
+          hint("Connected.");
+          return;
+        }
+        const res = await fetch("/api/connect", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            country: selected.country,
+            city: selected.city,
+            serverId: selected.serverId,
+            server: selected.server
+          })
+        });
+        const data = await res.json();
+        hint(data.message || "Requested.");
+        await loadStatus();
+      } catch (err) {
+        hint(err.message || "Connect failed.");
+      } finally {
+        goEl.disabled = !selected;
+      }
+    }
+
+    async function disconnect() {
+      stopEl.disabled = true;
+      try {
+        if (demo) {
+          status = { ...status, state: "disconnected", server: null, connectedAt: null };
+          paintStatus();
+          hint("Disconnected.");
+          return;
+        }
+        const res = await fetch("/api/disconnect", { method: "POST" });
+        const data = await res.json();
+        hint(data.message || "Disconnecting…");
+        await loadStatus();
+      } catch (err) {
+        hint(err.message || "Disconnect failed.");
+      }
+    }
+
+    async function changeProtocol() {
+      const protocol = protoEl.value;
+      try {
+        if (demo) {
+          hint("Protocol set to " + protoEl.selectedOptions[0].text);
+          return;
+        }
+        const res = await fetch("/api/protocol", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ protocol })
+        });
+        const data = await res.json();
+        hint(data.message || "Protocol updated.");
+        await loadStatus();
+      } catch (err) {
+        hint(err.message || "Could not change protocol.");
+      }
+    }
+
+    goEl.addEventListener("click", connect);
+    stopEl.addEventListener("click", disconnect);
+    protoEl.addEventListener("change", changeProtocol);
+    document.getElementById("refresh").addEventListener("click", loadList);
+    qEl.addEventListener("input", render);
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && selected && document.activeElement !== qEl && document.activeElement !== protoEl) connect();
+    });
+
+    demo = new URLSearchParams(location.search).has("demo");
+    loadList();
+    setInterval(loadStatus, 1000);
+    setInterval(() => { if (status.state === "connected") paintStatus(); }, 1000);
+  </script>
+</body>
+</html>

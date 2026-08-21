@@ -8,6 +8,8 @@ internal static class Runtime
 
     public static object? ConnectionManager { get; private set; }
     public static object? ServersLoader { get; private set; }
+    public static object? Settings { get; private set; }
+    public static object? TrafficManager { get; set; }
 
     public static string? ForcedCountry { get; set; }
     public static string? ForcedCity { get; set; }
@@ -24,6 +26,9 @@ internal static class Runtime
             object? loader = GetInstanceField(manager, "_serversLoader");
             if (loader != null)
                 ServersLoader = loader;
+            object? settings = GetInstanceField(manager, "_settings");
+            if (settings != null)
+                Settings = settings;
         }
     }
 

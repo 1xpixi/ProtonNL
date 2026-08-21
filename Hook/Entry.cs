@@ -69,12 +69,12 @@ public static class Entry
         {
             CooldownPatch.Apply(harmony, connection);
             PatchConnectionManager(harmony, connection);
+            PatchTrafficManager(harmony, connection);
         }
         else
             Logger.Write("skipped cooldown patch, connection assembly missing");
 
-        PipeServer.Start();
-        GuiLauncher.Start();
+        WebServer.Start();
     }
 
     private static void PatchConnectionManager(Harmony harmony, Assembly connection)
@@ -109,6 +109,33 @@ public static class Entry
     {
         Runtime.CaptureManager(__instance);
     }
+
+    private static void PatchTrafficManager(Harmony harmony, Assembly connection)
+    {
+        Type? traffic = connection.GetType("ProtonVPN.Client.Logic.Connection.NetworkingTraffic.NetworkTrafficManager");
+        if (traffic == null)
+        {
+            Logger.Write("NetworkTrafficManager type not found");
+            return;
+        }
+
+        foreach (ConstructorInfo ctor in traffic.GetConstructors())
+            harmony.Patch(ctor, postfix: new HarmonyMethod(typeof(Entry), nameof(TrafficCtorPostfix)));
+
+        MethodInfo? getVolume = traffic.GetMethod("GetVolume", BindingFlags.Instance | BindingFlags.Public);
+        if (getVolume != null)
+            harmony.Patch(getVolume, prefix: new HarmonyMethod(typeof(Entry), nameof(TrafficCapturePrefix)));
+
+        MethodInfo? changed = traffic.GetMethod("OnNetworkTrafficChanged", BindingFlags.Instance | BindingFlags.NonPublic);
+        if (changed != null)
+            harmony.Patch(changed, prefix: new HarmonyMethod(typeof(Entry), nameof(TrafficCapturePrefix)));
+
+        Logger.Write("patched NetworkTrafficManager");
+    }
+
+    public static void TrafficCtorPostfix(object __instance) => Runtime.TrafficManager = __instance;
+
+    public static void TrafficCapturePrefix(object __instance) => Runtime.TrafficManager = __instance;
 
     private static void PatchCountry(Harmony harmony, Assembly contracts)
     {

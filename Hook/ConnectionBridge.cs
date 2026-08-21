@@ -128,9 +128,178 @@ internal static class ConnectionBridge
             ForcedCity = Runtime.ForcedCity,
             ForcedServerId = Runtime.ForcedServerId,
             Ready = Runtime.ConnectionManager != null && Runtime.ServersLoader != null,
-            Regions = GetFreeRegions()
+            Regions = GetFreeRegions(),
+            Status = GetStatus()
         }, JsonOptions);
     }
+
+    public static StatusInfo GetStatus()
+    {
+        StatusInfo info = new()
+        {
+            Ready = Runtime.ConnectionManager != null,
+            Protocols = ProtocolOptions(),
+            Protocol = ReadProtocolName(Runtime.Settings)
+        };
+
+        object? manager = Runtime.ConnectionManager;
+        if (manager == null)
+            return info;
+
+        info.State = ReadState(manager);
+        info.Protected = info.State == "connected";
+        info.Blocked = manager.GetType().GetProperty("IsNetworkBlocked")?.GetValue(manager) is true;
+        ReadTraffic(info);
+
+        object? details = manager.GetType().GetProperty("CurrentConnectionDetails")?.GetValue(manager);
+        if (details == null)
+            return info;
+
+        object? server = details.GetType().GetProperty("Server")?.GetValue(details);
+        info.ServerId = GetString(details, "ServerId") ?? GetString(server ?? details, "Id");
+        info.Server = GetString(details, "ServerName") ?? GetString(server ?? details, "Name");
+        info.City = GetString(details, "City");
+        info.CountryCode = GetString(details, "ExitCountryCode") ?? GetString(server ?? details, "ExitCountry");
+        info.Country = string.IsNullOrWhiteSpace(info.CountryCode) ? null : CountryName(info.CountryCode);
+        info.Load = GetInt(server ?? details, "Load");
+        info.ActiveProtocol = details.GetType().GetProperty("Protocol")?.GetValue(details)?.ToString();
+
+        object? established = details.GetType().GetProperty("EstablishedConnectionTimeUtc")?.GetValue(details);
+        if (established is DateTime utc && utc != default)
+            info.ConnectedAt = DateTime.SpecifyKind(utc, DateTimeKind.Utc).ToString("o");
+
+        info.Ip = ReadIp(details, server);
+        return info;
+    }
+
+    private static void ReadTraffic(StatusInfo info)
+    {
+        object? traffic = Runtime.TrafficManager;
+        if (traffic == null)
+            return;
+
+        object? volume = traffic.GetType().GetMethod("GetVolume", Type.EmptyTypes)?.Invoke(traffic, null);
+        if (volume == null)
+            return;
+
+        info.BytesDown = GetULong(volume, "BytesDownloaded");
+        info.BytesUp = GetULong(volume, "BytesUploaded");
+    }
+
+    private static string? ReadIp(object details, object? server)
+    {
+        object? ip = details.GetType().GetProperty("ServerIpAddress")?.GetValue(details);
+        string? v4 = ip?.GetType().GetProperty("Ipv4Address")?.GetValue(ip) as string;
+        if (!string.IsNullOrWhiteSpace(v4))
+            return v4;
+
+        string? exit = server == null ? null : GetString(server, "ExitIp");
+        if (!string.IsNullOrWhiteSpace(exit))
+            return exit;
+
+        return details.GetType().GetProperty("EntryIpAddress")?.GetValue(details) as string;
+    }
+
+    private static ulong GetULong(object instance, string property)
+    {
+        object? value = instance.GetType().GetProperty(property)?.GetValue(instance);
+        return value is IConvertible convertible ? convertible.ToUInt64(null) : 0;
+    }
+
+    public static string Disconnect()
+    {
+        object? manager = Runtime.ConnectionManager;
+        if (manager == null)
+            return "ProtonVPN is not ready yet.";
+
+        MethodInfo? disconnect = manager.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
+            .FirstOrDefault(m => m.Name == "DisconnectAsync" && m.GetParameters().Length == 1);
+        if (disconnect == null)
+            return "Disconnect is not available.";
+
+        object trigger = GetTrigger("Exit") ?? GetTrigger("Disconnect") ?? GetTrigger("ConnectionCard")
+            ?? throw new InvalidOperationException("disconnect trigger not found");
+        disconnect.Invoke(manager, [trigger]);
+        Logger.Write("disconnect requested");
+        return "Disconnecting…";
+    }
+
+    public static string SetProtocol(string protocol)
+    {
+        object? settings = Runtime.Settings;
+        if (settings == null)
+            return "Settings are not ready yet.";
+
+        PropertyInfo? prop = settings.GetType().GetProperty("VpnProtocol");
+        if (prop == null)
+            return "Protocol setting not found.";
+
+        Type enumType = prop.PropertyType;
+        object parsed;
+        try
+        {
+            parsed = Enum.Parse(enumType, protocol, ignoreCase: true);
+        }
+        catch
+        {
+            return "Unknown protocol.";
+        }
+
+        prop.SetValue(settings, parsed);
+        Logger.Write("protocol set to " + parsed);
+
+        object? manager = Runtime.ConnectionManager;
+        bool connected = manager?.GetType().GetProperty("IsConnected")?.GetValue(manager) is true;
+        if (connected)
+        {
+            MethodInfo? reconnect = manager!.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                .FirstOrDefault(m => m.Name == "ReconnectAsync" && m.GetParameters().Length == 1);
+            object? trigger = GetTrigger("NewConnection") ?? GetTrigger("ConnectionCard");
+            if (reconnect != null && trigger != null)
+                reconnect.Invoke(manager, [trigger]);
+            return $"Switching to {LabelForProtocol(parsed.ToString()!)}…";
+        }
+
+        return $"Protocol set to {LabelForProtocol(parsed.ToString()!)}.";
+    }
+
+    private static string ReadState(object manager)
+    {
+        if (manager.GetType().GetProperty("IsConnected")?.GetValue(manager) is true)
+            return "connected";
+        if (manager.GetType().GetProperty("IsConnecting")?.GetValue(manager) is true)
+            return "connecting";
+        return "disconnected";
+    }
+
+    private static string? ReadProtocolName(object? settings)
+    {
+        return settings?.GetType().GetProperty("VpnProtocol")?.GetValue(settings)?.ToString();
+    }
+
+    private static List<ProtocolOption> ProtocolOptions()
+    {
+        string[] names =
+        [
+            "Smart", "WireGuardUdp", "WireGuardTcp", "WireGuardTls",
+            "OpenVpnUdp", "OpenVpnTcp", "ProTunUdp", "ProTunTcp", "ProTunTls"
+        ];
+        return names.Select(n => new ProtocolOption { Id = n, Label = LabelForProtocol(n) }).ToList();
+    }
+
+    private static string LabelForProtocol(string id) => id switch
+    {
+        "Smart" => "Smart",
+        "WireGuardUdp" => "WireGuard UDP",
+        "WireGuardTcp" => "WireGuard TCP",
+        "WireGuardTls" => "WireGuard TLS",
+        "OpenVpnUdp" => "OpenVPN UDP",
+        "OpenVpnTcp" => "OpenVPN TCP",
+        "ProTunUdp" => "Proton UDP",
+        "ProTunTcp" => "Proton TCP",
+        "ProTunTls" => "Proton TLS",
+        _ => id
+    };
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -219,6 +388,34 @@ internal sealed class ListResponse
     public string? ForcedServerId { get; set; }
     public bool Ready { get; set; }
     public List<FreeRegion> Regions { get; set; } = [];
+    public StatusInfo? Status { get; set; }
+}
+
+internal sealed class StatusInfo
+{
+    public bool Ready { get; set; }
+    public string State { get; set; } = "disconnected";
+    public string? Server { get; set; }
+    public string? ServerId { get; set; }
+    public string? City { get; set; }
+    public string? Country { get; set; }
+    public string? CountryCode { get; set; }
+    public int Load { get; set; }
+    public string? Protocol { get; set; }
+    public string? ActiveProtocol { get; set; }
+    public string? ConnectedAt { get; set; }
+    public string? Ip { get; set; }
+    public ulong BytesDown { get; set; }
+    public ulong BytesUp { get; set; }
+    public bool Protected { get; set; }
+    public bool Blocked { get; set; }
+    public List<ProtocolOption> Protocols { get; set; } = [];
+}
+
+internal sealed class ProtocolOption
+{
+    public string Id { get; set; } = "";
+    public string Label { get; set; } = "";
 }
 
 internal sealed class FreeRegion

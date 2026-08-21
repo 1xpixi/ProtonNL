@@ -44,12 +44,7 @@ add_custom_command(TARGET ProtonNL.Internal POST_BUILD
             -r win-x64
             --self-contained false
             -o $<TARGET_FILE_DIR:ProtonNL.Internal>
-    COMMAND ${DOTNET_EXE} publish ${CMAKE_SOURCE_DIR}/Gui/ProtonNL.Gui.csproj
-            -c $<IF:$<CONFIG:Debug>,Debug,Release>
-            -r win-x64
-            --self-contained false
-            -o $<TARGET_FILE_DIR:ProtonNL.Internal>
-    COMMENT "Publishing ProtonNL.Hook and ProtonNL.Gui next to Internal.dll"
+    COMMENT "Publishing ProtonNL.Hook next to Internal.dll"
 )
 
 add_dependencies(ProtonNL.Loader ProtonNL.Internal)

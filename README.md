@@ -12,7 +12,7 @@ Not affiliated with Proton AG.
 
 Grab a [release](https://github.com/1xpixi/ProtonNL/releases), start ProtonVPN, then run `ProtonNL.Loader.exe`.
 
-If the picker does not open, run `ProtonNL.Gui.exe` from the same folder. You need the [.NET Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/8.0) (x64).
+A local page opens at `http://127.0.0.1:27180/`. If it does not, open that URL yourself.
 
 ## Build
 
