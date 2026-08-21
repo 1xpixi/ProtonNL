@@ -1,0 +1,9 @@
+build/
+cmake-build-*/
+.vs/
+*.user
+*.pdb
+Hook/bin/
+Hook/obj/
+Gui/bin/
+Gui/obj/
