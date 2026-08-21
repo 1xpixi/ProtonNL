@@ -1,7 +1,15 @@
+using System.Runtime.InteropServices;
+
 namespace ProtonNL.Gui;
 
 internal sealed class MainForm : Form
 {
+    [DllImport("uxtheme.dll", CharSet = CharSet.Unicode)]
+    private static extern int SetWindowTheme(IntPtr hwnd, string pszSubAppName, string pszSubIdList);
+
+    private static readonly Color TreeBack = Color.FromArgb(28, 28, 32);
+    private static readonly Color TreeText = Color.FromArgb(237, 237, 242);
+    private static readonly Color TreeSelect = Color.FromArgb(50, 50, 56);
     private readonly HookClient _client = new();
     private readonly TreeView _tree = new();
     private readonly Button _connect = new();
@@ -19,8 +27,8 @@ internal sealed class MainForm : Form
         MinimizeBox = true;
         MaximizeBox = false;
         StartPosition = FormStartPosition.Manual;
-        Size = new Size(380, 560);
-        MinimumSize = new Size(340, 420);
+        Size = new Size(400, 580);
+        MinimumSize = new Size(360, 440);
         BackColor = Color.FromArgb(18, 18, 20);
         ForeColor = Color.FromArgb(237, 237, 242);
         Font = new Font("Segoe UI", 9.5f);
@@ -55,7 +63,7 @@ internal sealed class MainForm : Form
 
         Label subtitle = new()
         {
-            Text = "Choose a country or city, then connect.",
+            Text = "Country → city → server. Double-click a server to connect.",
             AutoSize = true,
             ForeColor = Color.FromArgb(150, 150, 158),
             Margin = new Padding(0, 0, 0, 12)
@@ -73,20 +81,25 @@ internal sealed class MainForm : Form
         _tree.BorderStyle = BorderStyle.None;
         _tree.BackColor = Color.FromArgb(28, 28, 32);
         _tree.ForeColor = Color.FromArgb(237, 237, 242);
-        _tree.LineColor = Color.FromArgb(28, 28, 32);
+        _tree.LineColor = Color.FromArgb(92, 92, 102);
         _tree.FullRowSelect = true;
         _tree.HideSelection = false;
-        _tree.HotTracking = true;
-        _tree.ShowLines = false;
-        _tree.ShowRootLines = false;
+        _tree.HotTracking = false;
+        _tree.DrawMode = TreeViewDrawMode.OwnerDrawText;
+        _tree.DrawNode += TreeDrawNode;
+        _tree.ShowLines = true;
+        _tree.ShowRootLines = true;
         _tree.ShowPlusMinus = true;
-        _tree.Indent = 16;
+        _tree.Indent = 19;
         _tree.ItemHeight = 26;
         _tree.Margin = Padding.Empty;
         _tree.NodeMouseDoubleClick += (_, e) =>
         {
-            if (e.Node != null)
-                ConnectNode(e.Node);
+            if (e.Node == null)
+                return;
+            if (e.Node.Nodes.Count > 0)
+                return;
+            ConnectNode(e.Node);
         };
         _tree.KeyDown += (_, e) =>
         {
@@ -167,6 +180,27 @@ internal sealed class MainForm : Form
             _reconnect.Stop();
             _client.Dispose();
         };
+        HandleCreated += (_, _) => SetWindowTheme(_tree.Handle, "", "");
+        _tree.HandleCreated += (_, _) => SetWindowTheme(_tree.Handle, "", "");
+    }
+
+    private void TreeDrawNode(object? sender, DrawTreeNodeEventArgs e)
+    {
+        if (e.Node == null)
+            return;
+
+        bool selected = (e.State & TreeNodeStates.Selected) != 0;
+        Rectangle row = new(e.Bounds.X, e.Bounds.Y, Math.Max(0, _tree.ClientSize.Width - e.Bounds.X), e.Bounds.Height);
+        using SolidBrush bg = new(selected ? TreeSelect : TreeBack);
+        e.Graphics.FillRectangle(bg, row);
+
+        TextRenderer.DrawText(
+            e.Graphics,
+            e.Node.Text,
+            _tree.Font,
+            e.Bounds,
+            TreeText,
+            TextFormatFlags.Left | TextFormatFlags.VerticalCenter | TextFormatFlags.NoPrefix | TextFormatFlags.EndEllipsis | TextFormatFlags.NoPadding);
     }
 
     protected override CreateParams CreateParams
@@ -184,7 +218,7 @@ internal sealed class MainForm : Form
         if (_tree.SelectedNode != null)
             ConnectNode(_tree.SelectedNode);
         else
-            SetStatus("Select a country or city first.");
+            SetStatus("Select a country, city, or server first.");
     }
 
     private async void ConnectNode(TreeNode node)
@@ -197,7 +231,7 @@ internal sealed class MainForm : Form
         try
         {
             await EnsureConnectedAsync();
-            string message = await _client.ConnectRegionAsync(row.Code, row.City, CancellationToken.None);
+            string message = await _client.ConnectRegionAsync(row, CancellationToken.None);
             SetStatus(message);
         }
         catch (Exception ex)
@@ -251,11 +285,7 @@ internal sealed class MainForm : Form
     {
         string? selectedKey = KeyOf(_tree.SelectedNode);
         HashSet<string> expanded = [];
-        foreach (TreeNode node in _tree.Nodes)
-        {
-            if (node.IsExpanded && node.Tag is RegionRow row)
-                expanded.Add(row.Code);
-        }
+        CollectExpanded(_tree.Nodes, expanded);
 
         _tree.BeginUpdate();
         _tree.Nodes.Clear();
@@ -267,37 +297,56 @@ internal sealed class MainForm : Form
                 Tag = new RegionRow
                 {
                     Code = region.Code,
-                    City = null,
                     Title = region.Name,
                     ServerCount = region.ServerCount
                 }
             };
 
-            if (region.Cities.Count > 1)
+            foreach (CityCount city in region.Cities)
             {
-                foreach (CityCount city in region.Cities)
+                TreeNode cityNode = new($"{city.Name}    {city.ServerCount}")
                 {
-                    country.Nodes.Add(new TreeNode($"{city.Name}    {city.ServerCount}")
+                    Tag = new RegionRow
+                    {
+                        Code = region.Code,
+                        City = city.Name,
+                        Title = city.Name,
+                        ServerCount = city.ServerCount
+                    }
+                };
+
+                foreach (ServerItem server in city.Servers)
+                {
+                    string label = server.Load > 0
+                        ? $"{server.Name}    {server.Load}%"
+                        : server.Name;
+                    cityNode.Nodes.Add(new TreeNode(label)
                     {
                         Tag = new RegionRow
                         {
                             Code = region.Code,
                             City = city.Name,
-                            Title = city.Name,
-                            ServerCount = city.ServerCount
+                            ServerId = server.Id,
+                            ServerName = server.Name,
+                            Title = server.Name,
+                            ServerCount = 1
                         }
                     });
                 }
+
+                country.Nodes.Add(cityNode);
+                if (expanded.Contains(KeyOf(cityNode)!))
+                    cityNode.Expand();
             }
 
             _tree.Nodes.Add(country);
-            if (expanded.Contains(region.Code))
+            if (expanded.Contains(KeyOf(country)!))
                 country.Expand();
         }
 
         if (selectedKey != null)
         {
-            TreeNode? match = FindNode(selectedKey);
+            TreeNode? match = FindNode(_tree.Nodes, selectedKey);
             if (match != null)
                 _tree.SelectedNode = match;
         }
@@ -305,17 +354,29 @@ internal sealed class MainForm : Form
         _tree.EndUpdate();
     }
 
-    private TreeNode? FindNode(string key)
+    private static void CollectExpanded(TreeNodeCollection nodes, HashSet<string> expanded)
     {
-        foreach (TreeNode country in _tree.Nodes)
+        foreach (TreeNode node in nodes)
         {
-            if (KeyOf(country) == key)
-                return country;
-            foreach (TreeNode city in country.Nodes)
+            if (node.IsExpanded)
             {
-                if (KeyOf(city) == key)
-                    return city;
+                string? key = KeyOf(node);
+                if (key != null)
+                    expanded.Add(key);
             }
+            CollectExpanded(node.Nodes, expanded);
+        }
+    }
+
+    private static TreeNode? FindNode(TreeNodeCollection nodes, string key)
+    {
+        foreach (TreeNode node in nodes)
+        {
+            if (KeyOf(node) == key)
+                return node;
+            TreeNode? child = FindNode(node.Nodes, key);
+            if (child != null)
+                return child;
         }
 
         return null;
@@ -325,13 +386,18 @@ internal sealed class MainForm : Form
     {
         if (node?.Tag is not RegionRow row)
             return null;
-        return row.City == null ? row.Code : $"{row.Code}/{row.City}";
+        if (!string.IsNullOrWhiteSpace(row.ServerId))
+            return $"{row.Code}/{row.City}/{row.ServerId}";
+        if (!string.IsNullOrWhiteSpace(row.City))
+            return $"{row.Code}/{row.City}";
+        return row.Code;
     }
 
     private static string Fingerprint(ListResponse snapshot)
     {
         return string.Join("|", snapshot.Regions.Select(r =>
-            $"{r.Code}:{r.ServerCount}:{string.Join(",", r.Cities.Select(c => c.Name + c.ServerCount))}"));
+            $"{r.Code}:{r.ServerCount}:{string.Join(",", r.Cities.Select(c =>
+                c.Name + c.ServerCount + ":" + string.Join(".", c.Servers.Select(s => s.Id))))}"));
     }
 
     private void SetReadyStatus(ListResponse snapshot)

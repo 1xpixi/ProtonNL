@@ -13,6 +13,14 @@ public static class FreeServerNlPatch
             if (string.Equals(strategy?.ToString(), "Random", StringComparison.Ordinal))
                 return;
 
+            if (!string.IsNullOrWhiteSpace(Runtime.ForcedServerId))
+            {
+                string? id = server.GetType().GetProperty("Id")?.GetValue(server) as string;
+                if (!string.Equals(id, Runtime.ForcedServerId, StringComparison.Ordinal))
+                    __result = false;
+                return;
+            }
+
             if (string.IsNullOrWhiteSpace(Runtime.ForcedCountry))
                 return;
 

@@ -92,10 +92,16 @@ internal static class PipeServer
                 string? city = root.TryGetProperty("city", out JsonElement cityEl)
                     ? cityEl.GetString()
                     : null;
+                string? serverId = root.TryGetProperty("serverId", out JsonElement serverEl)
+                    ? serverEl.GetString()
+                    : null;
+                string? serverName = root.TryGetProperty("server", out JsonElement nameEl)
+                    ? nameEl.GetString()
+                    : null;
                 if (string.IsNullOrWhiteSpace(country))
                     return JsonSerializer.Serialize(new { op = "error", message = "country required" });
 
-                string message = ConnectionBridge.Connect(country, city);
+                string message = ConnectionBridge.Connect(country, city, serverId, serverName);
                 return JsonSerializer.Serialize(new { op = "ok", message });
             }
             default:

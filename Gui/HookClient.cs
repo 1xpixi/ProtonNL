@@ -31,15 +31,20 @@ internal sealed class HookClient : IDisposable
         return JsonSerializer.Deserialize<ListResponse>(json, JsonOptions) ?? new ListResponse();
     }
 
-    public async Task<string> ConnectRegionAsync(string country, string? city, CancellationToken token)
+    public async Task<string> ConnectRegionAsync(RegionRow row, CancellationToken token)
     {
         var payload = new Dictionary<string, string?>
         {
             ["op"] = "connect",
-            ["country"] = country
+            ["country"] = row.Code
         };
-        if (!string.IsNullOrWhiteSpace(city))
-            payload["city"] = city;
+        if (!string.IsNullOrWhiteSpace(row.City))
+            payload["city"] = row.City;
+        if (!string.IsNullOrWhiteSpace(row.ServerId))
+        {
+            payload["serverId"] = row.ServerId;
+            payload["server"] = row.ServerName ?? row.Title;
+        }
 
         string json = await RequestAsync(JsonSerializer.Serialize(payload), token);
         ConnectResponse? response = JsonSerializer.Deserialize<ConnectResponse>(json, JsonOptions);

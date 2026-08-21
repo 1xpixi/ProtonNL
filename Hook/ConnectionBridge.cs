@@ -43,27 +43,40 @@ internal static class ConnectionBridge
                 regions[country] = region;
             }
 
+            if (string.IsNullOrWhiteSpace(city))
+                city = "(no city)";
+
             region.ServerCount++;
-            if (!string.IsNullOrWhiteSpace(city))
+            CityCount? existing = region.Cities.FirstOrDefault(c =>
+                string.Equals(c.Name, city, StringComparison.OrdinalIgnoreCase));
+            if (existing == null)
             {
-                CityCount? existing = region.Cities.FirstOrDefault(c =>
-                    string.Equals(c.Name, city, StringComparison.OrdinalIgnoreCase));
-                if (existing == null)
-                    region.Cities.Add(new CityCount { Name = city, ServerCount = 1 });
-                else
-                    existing.ServerCount++;
+                existing = new CityCount { Name = city };
+                region.Cities.Add(existing);
             }
+
+            existing.ServerCount++;
+            existing.Servers.Add(new ServerItem
+            {
+                Id = GetString(server, "Id") ?? "",
+                Name = GetString(server, "Name") ?? GetString(server, "Id") ?? "server",
+                Load = GetInt(server, "Load")
+            });
         }
 
         foreach (FreeRegion region in regions.Values)
+        {
             region.Cities.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+            foreach (CityCount cityNode in region.Cities)
+                cityNode.Servers.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+        }
 
         return regions.Values
             .OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
-    public static string Connect(string country, string? city)
+    public static string Connect(string country, string? city, string? serverId, string? serverName = null)
     {
         object? manager = Runtime.ConnectionManager;
         if (manager == null)
@@ -71,15 +84,19 @@ internal static class ConnectionBridge
 
         country = country.Trim().ToUpperInvariant();
         city = string.IsNullOrWhiteSpace(city) ? null : city.Trim();
+        serverId = string.IsNullOrWhiteSpace(serverId) ? null : serverId.Trim();
+        serverName = string.IsNullOrWhiteSpace(serverName) ? null : serverName.Trim();
 
         Runtime.ForcedCountry = country;
         Runtime.ForcedCity = city;
+        Runtime.ForcedServerId = serverId;
 
         try
         {
             object intent = GetFreeDefaultIntent()
                 ?? throw new InvalidOperationException("ConnectionIntent.FreeDefault not found");
-            object trigger = GetTrigger("CountriesCountry")
+            object trigger = GetTrigger("CountriesServer")
+                ?? GetTrigger("CountriesCountry")
                 ?? GetTrigger("NewConnection")
                 ?? GetTrigger("ConnectionCard")
                 ?? throw new InvalidOperationException("VpnTriggerDimension not found");
@@ -89,10 +106,12 @@ internal static class ConnectionBridge
                 ?? throw new InvalidOperationException("ConnectAsync not found");
 
             object? task = connect.Invoke(manager, [trigger, intent]);
-            Logger.Write($"connect requested country={country} city={city ?? "(any)"} task={task != null}");
-            return city == null
-                ? $"Connecting to {CountryName(country)} free servers..."
-                : $"Connecting to {CountryName(country)} / {city}...";
+            Logger.Write($"connect requested country={country} city={city ?? "(any)"} server={serverId ?? "(any)"} task={task != null}");
+            if (serverId != null)
+                return $"Connecting to {serverName ?? serverId}...";
+            if (city != null)
+                return $"Connecting to {CountryName(country)} / {city}...";
+            return $"Connecting to {CountryName(country)} free servers...";
         }
         catch (Exception ex)
         {
@@ -107,6 +126,7 @@ internal static class ConnectionBridge
         {
             ForcedCountry = Runtime.ForcedCountry,
             ForcedCity = Runtime.ForcedCity,
+            ForcedServerId = Runtime.ForcedServerId,
             Ready = Runtime.ConnectionManager != null && Runtime.ServersLoader != null,
             Regions = GetFreeRegions()
         }, JsonOptions);
@@ -173,6 +193,12 @@ internal static class ConnectionBridge
         return instance.GetType().GetProperty(property)?.GetValue(instance) as string;
     }
 
+    private static int GetInt(object instance, string property)
+    {
+        object? value = instance.GetType().GetProperty(property)?.GetValue(instance);
+        return value is IConvertible convertible ? convertible.ToInt32(null) : 0;
+    }
+
     public static string CountryName(string code)
     {
         try
@@ -190,6 +216,7 @@ internal sealed class ListResponse
 {
     public string? ForcedCountry { get; set; }
     public string? ForcedCity { get; set; }
+    public string? ForcedServerId { get; set; }
     public bool Ready { get; set; }
     public List<FreeRegion> Regions { get; set; } = [];
 }
@@ -206,4 +233,12 @@ internal sealed class CityCount
 {
     public string Name { get; set; } = "";
     public int ServerCount { get; set; }
+    public List<ServerItem> Servers { get; set; } = [];
+}
+
+internal sealed class ServerItem
+{
+    public string Id { get; set; } = "";
+    public string Name { get; set; } = "";
+    public int Load { get; set; }
 }
