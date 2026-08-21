@@ -4,6 +4,10 @@
 
 Unofficial ProtonVPN helper for Windows. Kills the Change Server cooldown and lets you pick any free region.
 
+![ProtonNL free server picker](screenshot.png)
+
+Not affiliated with Proton AG.
+
 ## Run
 
 Grab a [release](https://github.com/1xpixi/ProtonNL/releases), start ProtonVPN, then run `ProtonNL.Loader.exe`.
