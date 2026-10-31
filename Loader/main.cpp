@@ -12,8 +12,8 @@ void PrintUsage(const wchar_t* argv0)
     std::wcout
         << L"ProtonNL loader\n"
         << L"Injects ProtonNL.Internal.dll into ProtonVPN.Client.exe.\n"
-        << L"Removes the Change Server cooldown and opens a local picker at\n"
-        << L"http://127.0.0.1:27180/\n\n"
+        << L"Removes the Change Server cooldown and adds a free-server picker\n"
+        << L"inside the ProtonVPN window.\n\n"
         << L"Usage:\n"
         << L"  " << argv0 << L" [--launch] [--wait ms] [--dll path]\n\n"
         << L"  (default)  inject into a running ProtonVPN.Client.exe\n"

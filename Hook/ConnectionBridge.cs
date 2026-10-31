@@ -1,8 +1,6 @@
 using System.Collections;
 using System.Globalization;
 using System.Reflection;
-using System.Text.Json;
-using System.Text.Json.Serialization;
 
 namespace ProtonNL.Hook;
 
@@ -14,19 +12,31 @@ internal static class ConnectionBridge
         if (loader == null)
             return [];
 
-        MethodInfo? method = loader.GetType().GetMethod("GetFreeServers", Type.EmptyTypes)
-            ?? loader.GetType().GetMethod("GetServers", Type.EmptyTypes);
+        MethodInfo? method = FindInstanceMethod(loader, "GetFreeServers")
+            ?? FindInstanceMethod(loader, "GetServers");
         if (method == null)
+        {
+            Logger.Write("no GetFreeServers/GetServers on " + loader.GetType().FullName);
             return [];
+        }
 
         if (method.Invoke(loader, null) is not IEnumerable servers)
             return [];
 
+        int seen = 0, kept = 0, free = 0, paid = 0, noPhysical = 0;
         Dictionary<string, FreeRegion> regions = new(StringComparer.OrdinalIgnoreCase);
         foreach (object server in servers)
         {
-            if (!IsFree(server) || IsUnderMaintenance(server))
+            seen++;
+            if (IsFree(server))
+                free++;
+            else
+                paid++;
+            if (!HasPhysicalServers(server))
+                noPhysical++;
+            if (!IsListable(server))
                 continue;
+            kept++;
 
             string? country = GetString(server, "ExitCountry");
             if (string.IsNullOrWhiteSpace(country))
@@ -64,6 +74,8 @@ internal static class ConnectionBridge
             });
         }
 
+        Logger.Write($"list via {method.Name} seen={seen} kept={kept} free={free} paid={paid} noPhysical={noPhysical} plan={ReadPlanSummary()}");
+
         foreach (FreeRegion region in regions.Values)
         {
             region.Cities.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
@@ -87,14 +99,18 @@ internal static class ConnectionBridge
         serverId = string.IsNullOrWhiteSpace(serverId) ? null : serverId.Trim();
         serverName = string.IsNullOrWhiteSpace(serverName) ? null : serverName.Trim();
 
+        city = NormalizeCity(city);
         Runtime.ForcedCountry = country;
         Runtime.ForcedCity = city;
         Runtime.ForcedServerId = serverId;
+        Runtime.LastError = null;
 
         try
         {
-            object intent = GetFreeDefaultIntent()
-                ?? throw new InvalidOperationException("ConnectionIntent.FreeDefault not found");
+            object? server = serverId == null ? null : FindServerById(serverId);
+            object intent = BuildConnectionIntent(country, city, serverId, serverName, server)
+                ?? GetFreeDefaultIntent()
+                ?? throw new InvalidOperationException("ConnectionIntent not found");
             object trigger = GetTrigger("CountriesServer")
                 ?? GetTrigger("CountriesCountry")
                 ?? GetTrigger("NewConnection")
@@ -106,218 +122,231 @@ internal static class ConnectionBridge
                 ?? throw new InvalidOperationException("ConnectAsync not found");
 
             object? task = connect.Invoke(manager, [trigger, intent]);
-            Logger.Write($"connect requested country={country} city={city ?? "(any)"} server={serverId ?? "(any)"} task={task != null}");
+            if (task is Task awaitable)
+                awaitable.Wait(TimeSpan.FromSeconds(3));
+
+            string? error = ReadCurrentError(manager);
+            if (!string.IsNullOrWhiteSpace(error) && !string.Equals(error, "None", StringComparison.OrdinalIgnoreCase))
+            {
+                Runtime.LastError = error;
+                Logger.Write($"connect failed country={country} city={city ?? "(any)"} server={serverName ?? serverId ?? "(any)"} error={error}");
+                return $"Failed ({FriendlyError(error)}) on {serverName ?? city ?? CountryName(country)}.";
+            }
+
+            Logger.Write($"connect requested country={country} city={city ?? "(any)"} server={serverName ?? serverId ?? "(any)"} task={task != null}");
             if (serverId != null)
                 return $"Connecting to {serverName ?? serverId}...";
             if (city != null)
                 return $"Connecting to {CountryName(country)} / {city}...";
-            return $"Connecting to {CountryName(country)} free servers...";
+            return $"Connecting to {CountryName(country)}...";
         }
         catch (Exception ex)
         {
+            Runtime.LastError = ex.GetBaseException().Message;
             Logger.Write("connect failed: " + ex);
             return "Connect failed: " + ex.GetBaseException().Message;
         }
     }
 
-    public static string SnapshotJson()
+    private static string? ReadCurrentError(object manager)
     {
-        return JsonSerializer.Serialize(new ListResponse
-        {
-            ForcedCountry = Runtime.ForcedCountry,
-            ForcedCity = Runtime.ForcedCity,
-            ForcedServerId = Runtime.ForcedServerId,
-            Ready = Runtime.ConnectionManager != null && Runtime.ServersLoader != null,
-            Regions = GetFreeRegions(),
-            Status = GetStatus()
-        }, JsonOptions);
+        object? error = Runtime.GetInstanceField(manager, "_currentError");
+        string? name = error?.ToString();
+        if (string.IsNullOrWhiteSpace(name) || name is "None" or "NoneKeepEnabledKillSwitch")
+            return null;
+        return name;
     }
 
-    public static StatusInfo GetStatus()
+    private static string FriendlyError(string error) => error switch
     {
-        StatusInfo info = new()
-        {
-            Ready = Runtime.ConnectionManager != null,
-            Protocols = ProtocolOptions(),
-            Protocol = ReadProtocolName(Runtime.Settings)
-        };
-
-        object? manager = Runtime.ConnectionManager;
-        if (manager == null)
-            return info;
-
-        info.State = ReadState(manager);
-        info.Protected = info.State == "connected";
-        info.Blocked = manager.GetType().GetProperty("IsNetworkBlocked")?.GetValue(manager) is true;
-        ReadTraffic(info);
-
-        object? details = manager.GetType().GetProperty("CurrentConnectionDetails")?.GetValue(manager);
-        if (details == null)
-            return info;
-
-        object? server = details.GetType().GetProperty("Server")?.GetValue(details);
-        info.ServerId = GetString(details, "ServerId") ?? GetString(server ?? details, "Id");
-        info.Server = GetString(details, "ServerName") ?? GetString(server ?? details, "Name");
-        info.City = GetString(details, "City");
-        info.CountryCode = GetString(details, "ExitCountryCode") ?? GetString(server ?? details, "ExitCountry");
-        info.Country = string.IsNullOrWhiteSpace(info.CountryCode) ? null : CountryName(info.CountryCode);
-        info.Load = GetInt(server ?? details, "Load");
-        info.ActiveProtocol = details.GetType().GetProperty("Protocol")?.GetValue(details)?.ToString();
-
-        object? established = details.GetType().GetProperty("EstablishedConnectionTimeUtc")?.GetValue(details);
-        if (established is DateTime utc && utc != default)
-            info.ConnectedAt = DateTime.SpecifyKind(utc, DateTimeKind.Utc).ToString("o");
-
-        info.Ip = ReadIp(details, server);
-        return info;
-    }
-
-    private static void ReadTraffic(StatusInfo info)
-    {
-        object? traffic = Runtime.TrafficManager;
-        if (traffic == null)
-            return;
-
-        object? volume = traffic.GetType().GetMethod("GetVolume", Type.EmptyTypes)?.Invoke(traffic, null);
-        if (volume == null)
-            return;
-
-        info.BytesDown = GetULong(volume, "BytesDownloaded");
-        info.BytesUp = GetULong(volume, "BytesUploaded");
-    }
-
-    private static string? ReadIp(object details, object? server)
-    {
-        object? ip = details.GetType().GetProperty("ServerIpAddress")?.GetValue(details);
-        string? v4 = ip?.GetType().GetProperty("Ipv4Address")?.GetValue(ip) as string;
-        if (!string.IsNullOrWhiteSpace(v4))
-            return v4;
-
-        string? exit = server == null ? null : GetString(server, "ExitIp");
-        if (!string.IsNullOrWhiteSpace(exit))
-            return exit;
-
-        return details.GetType().GetProperty("EntryIpAddress")?.GetValue(details) as string;
-    }
-
-    private static ulong GetULong(object instance, string property)
-    {
-        object? value = instance.GetType().GetProperty(property)?.GetValue(instance);
-        return value is IConvertible convertible ? convertible.ToUInt64(null) : 0;
-    }
-
-    public static string Disconnect()
-    {
-        object? manager = Runtime.ConnectionManager;
-        if (manager == null)
-            return "ProtonVPN is not ready yet.";
-
-        MethodInfo? disconnect = manager.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
-            .FirstOrDefault(m => m.Name == "DisconnectAsync" && m.GetParameters().Length == 1);
-        if (disconnect == null)
-            return "Disconnect is not available.";
-
-        object trigger = GetTrigger("Exit") ?? GetTrigger("Disconnect") ?? GetTrigger("ConnectionCard")
-            ?? throw new InvalidOperationException("disconnect trigger not found");
-        disconnect.Invoke(manager, [trigger]);
-        Logger.Write("disconnect requested");
-        return "Disconnecting…";
-    }
-
-    public static string SetProtocol(string protocol)
-    {
-        object? settings = Runtime.Settings;
-        if (settings == null)
-            return "Settings are not ready yet.";
-
-        PropertyInfo? prop = settings.GetType().GetProperty("VpnProtocol");
-        if (prop == null)
-            return "Protocol setting not found.";
-
-        Type enumType = prop.PropertyType;
-        object parsed;
-        try
-        {
-            parsed = Enum.Parse(enumType, protocol, ignoreCase: true);
-        }
-        catch
-        {
-            return "Unknown protocol.";
-        }
-
-        prop.SetValue(settings, parsed);
-        Logger.Write("protocol set to " + parsed);
-
-        object? manager = Runtime.ConnectionManager;
-        bool connected = manager?.GetType().GetProperty("IsConnected")?.GetValue(manager) is true;
-        if (connected)
-        {
-            MethodInfo? reconnect = manager!.GetType().GetMethods(BindingFlags.Instance | BindingFlags.Public)
-                .FirstOrDefault(m => m.Name == "ReconnectAsync" && m.GetParameters().Length == 1);
-            object? trigger = GetTrigger("NewConnection") ?? GetTrigger("ConnectionCard");
-            if (reconnect != null && trigger != null)
-                reconnect.Invoke(manager, [trigger]);
-            return $"Switching to {LabelForProtocol(parsed.ToString()!)}…";
-        }
-
-        return $"Protocol set to {LabelForProtocol(parsed.ToString()!)}.";
-    }
-
-    private static string ReadState(object manager)
-    {
-        if (manager.GetType().GetProperty("IsConnected")?.GetValue(manager) is true)
-            return "connected";
-        if (manager.GetType().GetProperty("IsConnecting")?.GetValue(manager) is true)
-            return "connecting";
-        return "disconnected";
-    }
-
-    private static string? ReadProtocolName(object? settings)
-    {
-        return settings?.GetType().GetProperty("VpnProtocol")?.GetValue(settings)?.ToString();
-    }
-
-    private static List<ProtocolOption> ProtocolOptions()
-    {
-        string[] names =
-        [
-            "Smart", "WireGuardUdp", "WireGuardTcp", "WireGuardTls",
-            "OpenVpnUdp", "OpenVpnTcp", "ProTunUdp", "ProTunTcp", "ProTunTls"
-        ];
-        return names.Select(n => new ProtocolOption { Id = n, Label = LabelForProtocol(n) }).ToList();
-    }
-
-    private static string LabelForProtocol(string id) => id switch
-    {
-        "Smart" => "Smart",
-        "WireGuardUdp" => "WireGuard UDP",
-        "WireGuardTcp" => "WireGuard TCP",
-        "WireGuardTls" => "WireGuard TLS",
-        "OpenVpnUdp" => "OpenVPN UDP",
-        "OpenVpnTcp" => "OpenVPN TCP",
-        "ProTunUdp" => "Proton UDP",
-        "ProTunTcp" => "Proton TCP",
-        "ProTunTls" => "Proton TLS",
-        _ => id
-    };
-
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
+        "NoServers" => "no servers for this protocol",
+        "ServerUnreachable" => "server unreachable",
+        "ServerOffline" => "server offline",
+        "TlsError" => "TLS error",
+        "TlsCertificateError" => "certificate error",
+        "PingTimeoutError" => "timed out",
+        "AdapterTimeoutError" => "adapter timed out",
+        "Unknown" => "unknown error",
+        _ => error
     };
 
     private static object? GetFreeDefaultIntent()
     {
-        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+        Type? type = FindType("ProtonVPN.Client.Logic.Connection.Contracts.Models.Intents.ConnectionIntent");
+        return type?.GetProperty("FreeDefault", BindingFlags.Public | BindingFlags.Static)?.GetValue(null);
+    }
+
+    private static object? BuildConnectionIntent(
+        string country, string? city, string? serverId, string? serverName, object? server)
+    {
+        object? location = BuildLocationIntent(country, city, serverId, serverName ?? (server == null ? null : GetString(server, "Name")));
+        if (location == null)
+            return null;
+
+        object? feature = BuildFeatureIntent(server);
+        Type? intentType = FindType("ProtonVPN.Client.Logic.Connection.Contracts.Models.Intents.ConnectionIntent");
+        ConstructorInfo? ctor = intentType?.GetConstructors()
+            .FirstOrDefault(c => c.GetParameters().Length is 1 or 2);
+        if (ctor == null)
+            return null;
+
+        object?[] args = ctor.GetParameters().Length == 1 ? [location] : [location, feature];
+        object intent = ctor.Invoke(args);
+        Logger.Write($"intent {intent} feature={(feature?.GetType().Name ?? "none")}");
+        return intent;
+    }
+
+    private static object? BuildLocationIntent(string country, string? city, string? serverId, string? serverName)
+    {
+        if (!string.IsNullOrWhiteSpace(serverId))
         {
-            Type? type = assembly.GetType("ProtonVPN.Client.Logic.Connection.Contracts.Models.Intents.ConnectionIntent");
-            PropertyInfo? freeDefault = type?.GetProperty("FreeDefault", BindingFlags.Public | BindingFlags.Static);
-            if (freeDefault != null)
-                return freeDefault.GetValue(null);
+            Type? infoType = FindType("ProtonVPN.Client.Logic.Connection.Contracts.Models.ServerInfo");
+            MethodInfo? fromInfo = infoType?.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .FirstOrDefault(m => m.Name == "From" && m.GetParameters().Length == 2);
+            object? info = fromInfo?.Invoke(null, [serverId, serverName ?? serverId]);
+            Type? serverIntent = FindType(
+                "ProtonVPN.Client.Logic.Connection.Contracts.Models.Intents.Locations.Servers.SingleServerLocationIntent");
+            if (info != null && serverIntent != null)
+            {
+                foreach (MethodInfo method in serverIntent.GetMethods(BindingFlags.Public | BindingFlags.Static))
+                {
+                    if (method.Name != "From")
+                        continue;
+                    ParameterInfo[] args = method.GetParameters();
+                    if (args.Length == 3 && args[2].ParameterType.Name == "ServerInfo")
+                        return method.Invoke(null, [country, city, info]);
+                    if (args.Length == 2 && args[1].ParameterType.Name == "ServerInfo")
+                        return method.Invoke(null, [country, info]);
+                }
+            }
+        }
+
+        if (city != null)
+        {
+            Type? cityIntent = FindType(
+                "ProtonVPN.Client.Logic.Connection.Contracts.Models.Intents.Locations.Cities.SingleCityLocationIntent");
+            object? cityLocation = cityIntent?.GetMethods(BindingFlags.Public | BindingFlags.Static)
+                .FirstOrDefault(m =>
+                {
+                    ParameterInfo[] args = m.GetParameters();
+                    return m.Name == "From" && args.Length == 2 && args[0].ParameterType == typeof(string) && args[1].ParameterType == typeof(string);
+                })
+                ?.Invoke(null, [country, city]);
+            if (cityLocation != null)
+                return cityLocation;
+        }
+
+        Type? countryIntent = FindType(
+            "ProtonVPN.Client.Logic.Connection.Contracts.Models.Intents.Locations.Countries.SingleCountryLocationIntent");
+        return countryIntent?.GetMethod("From", BindingFlags.Public | BindingFlags.Static, [typeof(string)])
+            ?.Invoke(null, [country]);
+    }
+
+    private static object? BuildFeatureIntent(object? server)
+    {
+        if (server == null)
+            return null;
+
+        object? features = server.GetType().GetProperty("Features")?.GetValue(server);
+        ulong flags = features is IConvertible convertible ? convertible.ToUInt64(null) : 0;
+        const ulong secureCore = 1;
+        const ulong tor = 2;
+        if ((flags & secureCore) != 0)
+        {
+            Type? type = FindType(
+                "ProtonVPN.Client.Logic.Connection.Contracts.Models.Intents.Features.SecureCoreFeatureIntent");
+            string? entry = GetString(server, "EntryCountry");
+            ConstructorInfo? ctor = type?.GetConstructor([typeof(string)]);
+            return ctor != null ? ctor.Invoke([entry]) : type?.GetConstructor(Type.EmptyTypes)?.Invoke(null);
+        }
+
+        if ((flags & tor) != 0)
+        {
+            Type? type = FindType(
+                "ProtonVPN.Client.Logic.Connection.Contracts.Models.Intents.Features.TorFeatureIntent");
+            return type?.GetConstructor(Type.EmptyTypes)?.Invoke(null);
         }
 
         return null;
+    }
+
+    private static object? FindServerById(string serverId)
+    {
+        object? loader = Runtime.ServersLoader;
+        MethodInfo? method = loader?.GetType().GetMethod("GetById", [typeof(string)])
+            ?? loader?.GetType().GetMethod("GetServers", Type.EmptyTypes);
+        if (loader == null || method == null)
+            return null;
+
+        if (method.Name == "GetById")
+            return method.Invoke(loader, [serverId]);
+
+        if (method.Invoke(loader, null) is not IEnumerable servers)
+            return null;
+
+        foreach (object server in servers)
+        {
+            if (string.Equals(GetString(server, "Id"), serverId, StringComparison.Ordinal))
+                return server;
+        }
+
+        return null;
+    }
+
+    private static Type? FindType(string fullName)
+    {
+        foreach (Assembly assembly in AppDomain.CurrentDomain.GetAssemblies())
+        {
+            Type? type = assembly.GetType(fullName);
+            if (type != null)
+                return type;
+        }
+
+        return null;
+    }
+
+    private static MethodInfo? FindInstanceMethod(object instance, string name)
+    {
+        for (Type? type = instance.GetType(); type != null; type = type.BaseType)
+        {
+            MethodInfo? method = type.GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .FirstOrDefault(m => m.Name == name && m.GetParameters().Length == 0 && !m.IsGenericMethod);
+            if (method != null)
+                return method;
+        }
+
+        foreach (Type iface in instance.GetType().GetInterfaces())
+        {
+            MethodInfo? method = iface.GetMethods(BindingFlags.Instance | BindingFlags.Public)
+                .FirstOrDefault(m => m.Name == name && m.GetParameters().Length == 0);
+            if (method != null)
+                return method;
+        }
+
+        return null;
+    }
+
+    private static string ReadPlanSummary()
+    {
+        object? settings = Runtime.Settings;
+        object? plan = settings?.GetType().GetProperty("VpnPlan")?.GetValue(settings);
+        if (plan == null)
+            return "unknown";
+
+        string name = plan.GetType().GetProperty("Title")?.GetValue(plan)?.ToString()
+            ?? plan.GetType().GetProperty("Name")?.GetValue(plan)?.ToString()
+            ?? plan.ToString()
+            ?? "plan";
+        string? maxTier = plan.GetType().GetProperty("MaxTier")?.GetValue(plan)?.ToString();
+        string paid = plan.GetType().GetProperty("IsPaid")?.GetValue(plan) is true ? "paid" : "free";
+        return $"{name}/{paid}/tier={maxTier}";
+    }
+
+    private static string? NormalizeCity(string? city)
+    {
+        if (string.IsNullOrWhiteSpace(city) || string.Equals(city, "(no city)", StringComparison.OrdinalIgnoreCase))
+            return null;
+        return city.Trim();
     }
 
     private static object? GetTrigger(string name)
@@ -339,6 +368,43 @@ internal static class ConnectionBridge
         }
 
         return null;
+    }
+
+    private static bool IsListable(object server)
+    {
+        if (!IsFree(server) || IsUnderMaintenance(server) || IsB2B(server))
+            return false;
+
+        string? tier = GetTierName(server);
+        return !string.Equals(tier, "Internal", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsB2B(object server)
+    {
+        MethodInfo? method = server.GetType().GetMethod("IsB2B", Type.EmptyTypes);
+        return method?.Invoke(server, null) is true;
+    }
+
+    private static bool HasPhysicalServers(object server)
+    {
+        object? physical = server.GetType().GetProperty("Servers")?.GetValue(server);
+        if (physical is not IEnumerable items)
+            return false;
+
+        IEnumerator enumerator = items.GetEnumerator();
+        try
+        {
+            return enumerator.MoveNext();
+        }
+        finally
+        {
+            (enumerator as IDisposable)?.Dispose();
+        }
+    }
+
+    private static string? GetTierName(object server)
+    {
+        return server.GetType().GetProperty("Tier")?.GetValue(server)?.ToString();
     }
 
     private static bool IsFree(object server)
@@ -379,43 +445,6 @@ internal static class ConnectionBridge
             return code.ToUpperInvariant();
         }
     }
-}
-
-internal sealed class ListResponse
-{
-    public string? ForcedCountry { get; set; }
-    public string? ForcedCity { get; set; }
-    public string? ForcedServerId { get; set; }
-    public bool Ready { get; set; }
-    public List<FreeRegion> Regions { get; set; } = [];
-    public StatusInfo? Status { get; set; }
-}
-
-internal sealed class StatusInfo
-{
-    public bool Ready { get; set; }
-    public string State { get; set; } = "disconnected";
-    public string? Server { get; set; }
-    public string? ServerId { get; set; }
-    public string? City { get; set; }
-    public string? Country { get; set; }
-    public string? CountryCode { get; set; }
-    public int Load { get; set; }
-    public string? Protocol { get; set; }
-    public string? ActiveProtocol { get; set; }
-    public string? ConnectedAt { get; set; }
-    public string? Ip { get; set; }
-    public ulong BytesDown { get; set; }
-    public ulong BytesUp { get; set; }
-    public bool Protected { get; set; }
-    public bool Blocked { get; set; }
-    public List<ProtocolOption> Protocols { get; set; } = [];
-}
-
-internal sealed class ProtocolOption
-{
-    public string Id { get; set; } = "";
-    public string Label { get; set; } = "";
 }
 
 internal sealed class FreeRegion

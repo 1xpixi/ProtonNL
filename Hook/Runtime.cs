@@ -9,11 +9,11 @@ internal static class Runtime
     public static object? ConnectionManager { get; private set; }
     public static object? ServersLoader { get; private set; }
     public static object? Settings { get; private set; }
-    public static object? TrafficManager { get; set; }
 
     public static string? ForcedCountry { get; set; }
     public static string? ForcedCity { get; set; }
     public static string? ForcedServerId { get; set; }
+    public static string? LastError { get; set; }
 
     public static void CaptureManager(object? manager)
     {
